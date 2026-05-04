@@ -1,0 +1,233 @@
+#!/bin/bash
+set -e
+
+echo "======================================"
+echo "   VSFTPD AUTO SETUP (FIXED VERSION)"
+echo "======================================"
+
+# ---------------------------
+
+# OPTIONS
+
+# ---------------------------
+
+read -p "Shared folder for all users? (y/n): " SHARED
+read -p "Allow WRITE access for virtual users? (y/n): " VWRITE
+read -p "Enable anonymous FTP? (y/n): " ANON
+
+if [[ "$ANON" == "y" ]]; then
+read -p "Anonymous mode (r = read-only, w = write): " ANONMODE
+fi
+
+# ---------------------------
+
+# INSTALL
+
+# ---------------------------
+
+echo "[+] Installing vsftpd..."
+sudo apt update -y
+sudo apt install -y vsftpd db-util
+
+# ---------------------------
+
+# SYSTEM USER
+
+# ---------------------------
+
+if ! id ftpuser &>/dev/null; then
+sudo useradd -m -s /usr/sbin/nologin ftpuser
+fi
+
+BASE="/home/ftpuser"
+
+# ---------------------------
+
+# DIRECTORY MODE
+
+# ---------------------------
+
+if [[ "$SHARED" == "y" ]]; then
+echo "[+] Shared mode enabled"
+
+
+sudo mkdir -p $BASE/shared
+sudo chown ftpuser:ftpuser $BASE/shared
+
+LOCAL_ROOT="$BASE/shared"
+
+
+else
+echo "[+] Per-user mode enabled"
+
+
+sudo mkdir -p $BASE/users
+sudo chown ftpuser:ftpuser $BASE/users
+
+# IMPORTANT: keep literal $USER for vsftpd
+LOCAL_ROOT="$BASE/users/\$USER"
+
+
+fi
+
+# ---------------------------
+
+# VIRTUAL USERS INPUT
+
+# ---------------------------
+
+echo ""
+echo "Enter virtual users (blank username to finish):"
+
+USER_FILE="/etc/vsftpd/virtual_users.txt"
+sudo mkdir -p /etc/vsftpd
+sudo rm -f $USER_FILE
+
+while true; do
+read -p "Username: " USER
+[[ -z "$USER" ]] && break
+
+
+read -s -p "Password: " PASS
+echo ""
+
+echo "$USER" | sudo tee -a $USER_FILE > /dev/null
+echo "$PASS" | sudo tee -a $USER_FILE > /dev/null
+
+if [[ "$SHARED" != "y" ]]; then
+    sudo mkdir -p $BASE/users/$USER
+    sudo chown ftpuser:ftpuser $BASE/users/$USER
+fi
+
+
+done
+
+echo ""
+
+# ---------------------------
+
+# PAM CONFIG
+
+# ---------------------------
+
+sudo bash -c 'cat > /etc/pam.d/vsftpd.virtual <<EOF
+auth required pam_userdb.so db=/etc/vsftpd/virtual_users
+account required pam_userdb.so db=/etc/vsftpd/virtual_users
+EOF'
+
+# ---------------------------
+# ANONYMOUS CONFIG
+# ---------------------------
+
+ANON_CFG="anonymous_enable=NO"
+
+if [[ "$ANON" == "y" ]]; then
+    sudo mkdir -p /home/ftpuser/anonymous
+
+    if [[ "$ANONMODE" == "r" ]]; then
+        sudo chown root:root /home/ftpuser/anonymous
+        sudo chmod 755 /home/ftpuser/anonymous
+
+        ANON_CFG="anonymous_enable=YES
+anon_root=/home/ftpuser/anonymous
+anon_upload_enable=NO
+anon_mkdir_write_enable=NO"
+    else
+        sudo chown ftpuser:ftpuser /home/ftpuser/anonymous
+        sudo chmod 775 /home/ftpuser/anonymous
+
+        ANON_CFG="anonymous_enable=YES
+anon_root=/home/ftpuser/anonymous
+anon_upload_enable=YES
+anon_mkdir_write_enable=YES"
+    fi
+fi
+
+# ---------------------------
+
+# WRITE PERMISSION
+
+# ---------------------------
+
+if [[ "$VWRITE" == "y" ]]; then
+WRITE_ENABLE="YES"
+else
+WRITE_ENABLE="NO"
+fi
+
+# ---------------------------
+
+# FINAL CONFIG (FIXED)
+
+# ---------------------------
+
+echo "[+] Writing vsftpd config..."
+
+sudo bash -c "cat > /etc/vsftpd.conf <<EOF
+listen=YES
+listen_ipv6=NO
+
+$ANON_CFG
+
+local_enable=YES
+write_enable=$WRITE_ENABLE
+
+guest_enable=YES
+guest_username=ftpuser
+
+pam_service_name=vsftpd.virtual
+
+virtual_use_local_privs=YES
+
+# 🔥 FIX: ensure correct virtual user mapping
+
+user_sub_token=\$USER
+local_root=$LOCAL_ROOT
+
+chroot_local_user=YES
+allow_writeable_chroot=YES
+
+secure_chroot_dir=/var/run/vsftpd/empty
+EOF"
+
+# ---------------------------
+
+# BUILD DATABASE
+
+# ---------------------------
+
+echo "[+] Building user database..."
+
+sudo db_load -T -t hash \
+-f /etc/vsftpd/virtual_users.txt \
+/etc/vsftpd/virtual_users.db
+
+sudo chmod 600 /etc/vsftpd/virtual_users.db
+
+# ---------------------------
+
+# START SERVICE
+
+# ---------------------------
+
+echo "[+] Restarting vsftpd..."
+
+sudo systemctl restart vsftpd
+sudo systemctl enable vsftpd
+
+# ---------------------------
+
+# DONE
+
+# ---------------------------
+
+echo ""
+echo "======================================"
+echo "SETUP COMPLETE"
+echo "======================================"
+echo "Shared mode: $SHARED"
+echo "Anonymous: $ANON"
+echo "Write enabled: $WRITE_ENABLE"
+echo "Root: $LOCAL_ROOT"
+echo "======================================"
+
