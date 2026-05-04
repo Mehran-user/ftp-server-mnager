@@ -1,0 +1,8 @@
+Package: ftp-server-mnager
+Architecture: all
+Version: 1.0
+Section: misc
+Maintainer: mehran <s300mehran@gmail.com>
+Priority: optional
+Standards-Version: 1.0
+Description: A ubuntu FTP server manager that uses vsftpd.
