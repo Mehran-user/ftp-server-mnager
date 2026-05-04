@@ -27,12 +27,8 @@ git clone https://github.com/Mehran-user/ftp-server-mnager.git .
 
 Package the deb using dpkg:
 ```bash
-dpkg-deb --build .
-```
-
-Rename the deb:
-```bash
-mv ..deb ftp-server-mnager.deb
+cd ../
+dpkg-deb --build ftp-server-mnager
 ```
 
 Install the deb:
