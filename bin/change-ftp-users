@@ -1,0 +1,163 @@
+#!/bin/bash
+
+echo "======================================"
+echo "     VSFTPD USER MANAGER TOOL"
+echo "======================================"
+
+USER_FILE="/etc/vsftpd/virtual_users.txt"
+DB_FILE="/etc/vsftpd/virtual_users.db"
+BASE="/home/ftpuser"
+
+sudo mkdir -p /etc/vsftpd
+
+# ---------------------------
+# HELPERS
+# ---------------------------
+
+rebuild() {
+    echo "[+] Syncing users safely..."
+
+    sudo systemctl stop vsftpd
+
+    sudo rm -f "$DB_FILE"
+
+    sudo db_load -T -t hash \
+        -f "$USER_FILE" \
+        "$DB_FILE"
+
+    sudo chmod 600 "$DB_FILE"
+
+    sudo systemctl start vsftpd
+
+    echo "[✔] Fully synced and restarted"
+}
+
+# ---------------------------
+# LOAD USERS (SOURCE OF TRUTH)
+# ---------------------------
+
+declare -A USERS
+
+if [[ -f "$USER_FILE" ]]; then
+    while read -r u && read -r p; do
+        [[ -z "$u" ]] && continue
+        USERS["$u"]="$p"
+    done < "$USER_FILE"
+fi
+
+# ---------------------------
+# MENU
+# ---------------------------
+
+echo ""
+echo "1) Add user"
+echo "2) Remove user"
+echo "3) Change password"
+echo "4) List users"
+echo "5) Apply changes (rebuild)"
+echo ""
+
+read -p "Choose option: " OPT
+
+# ---------------------------
+# ADD USER
+# ---------------------------
+
+add_user() {
+    read -p "Username: " u
+
+    if [[ -n "${USERS[$u]}" ]]; then
+        echo "[!] User already exists"
+        return
+    fi
+
+    read -s -p "Password: " p
+    echo ""
+
+    USERS["$u"]="$p"
+
+    sudo mkdir -p "$BASE/users/$u"
+    sudo chown ftpuser:ftpuser "$BASE/users/$u"
+
+    echo "[+] Added: $u"
+}
+
+# ---------------------------
+# REMOVE USER
+# ---------------------------
+
+remove_user() {
+    read -p "Username: " u
+
+    if [[ -z "${USERS[$u]}" ]]; then
+        echo "[!] User not found"
+        return
+    fi
+
+    unset USERS["$u"]
+
+    read -p "Move folder to Trash? (y/n): " t
+    if [[ "$t" == "y" && -d "$BASE/users/$u" ]]; then
+        gio trash "$BASE/users/$u"
+    fi
+
+    echo "[+] Removed: $u"
+}
+
+# ---------------------------
+# CHANGE PASSWORD
+# ---------------------------
+
+change_pass() {
+    read -p "Username: " u
+
+    if [[ -z "${USERS[$u]}" ]]; then
+        echo "[!] User not found"
+        return
+    fi
+
+    read -s -p "New password: " p
+    echo ""
+
+    USERS["$u"]="$p"
+
+    echo "[+] Password updated: $u"
+}
+
+# ---------------------------
+# LIST USERS
+# ---------------------------
+
+list_users() {
+    echo ""
+    echo "====== USERS ======"
+
+    if [[ ${#USERS[@]} -eq 0 ]]; then
+        echo "(no users)"
+        return
+    fi
+
+    for u in "${!USERS[@]}"; do
+        echo " - $u"
+    done
+
+    echo "==================="
+}
+
+# ---------------------------
+# ROUTER
+# ---------------------------
+
+case "$OPT" in
+    1) add_user; rebuild ;;
+    2) remove_user; rebuild ;;
+    3) change_pass; rebuild ;;
+    4) list_users ;;
+    5) rebuild ;;
+    *) echo "Invalid option" ;;
+esac
+
+echo ""
+echo "======================================"
+echo "DONE"
+echo "======================================"
